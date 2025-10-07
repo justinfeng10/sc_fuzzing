@@ -17,6 +17,15 @@ def load_iq_file(filepath):
 def downsample(signal, factor):
     return signal[::factor]
 
+# Mean of time series amplitude
+def feature_amplitude_mean(signal):
+    magnitude = abs(signal)
+    return np.mean(signal)
+
+# Standard Deviation of time series amplitude
+def feature_amplitude_std(signal):
+    magnitude = abs(signal)
+    return np.std(signal)
 
 # Wavelet Transform
 def feature_wavelet(signal):
@@ -103,16 +112,28 @@ for file in iq_files:
     for seg in iq_data:
         # Extract features
         
+        # Time Analysis
+        # Mean of Amplitude
+        mean_amplitude = feature_amplitude_mean(seg)
+        # Standard Deviation of Amplitude
+        mean_std = feature_amplitude_std(seg)
+        # TODO: Skew
+        # TODO: Autocorrelation. Returns the autocorrelation for a chosen lag
+        # TODO: Kurtosis. Returns the kurtosis of this segment
+
+        # Frequency Analysis
+        # TODO: Num Peaks. Return the number of peaks seen in this segment (for FFT)
+        # TODO: Spectral Centroid. Returns the frequency of the center of the energy in this segment (for FFT)
+        # TODO: Spectral Entropy
+
         # Time + Frequency Analysis
         # Wavelet Transform
         wavelet_energy, wavelet_weighted_scale = feature_wavelet(seg)
         # Wigner Ville
-        
         #wvd_energy, wvd_weighted_freq = feature_wigner_ville(seg)
-        
-        
-        # New
+        # STFT
         stft_energy, stft_weighted_freq = feature_stft(seg, samp_rate)
+        # TODO: SCF or CAF
         
         # Store results
         results.append({
