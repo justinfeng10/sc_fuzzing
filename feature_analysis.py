@@ -2,9 +2,12 @@ import numpy as np
 import glob
 import os
 import pandas as pd
+from scipy.stats import skew
+from scipy.signal import welch
 from scipy.signal import cwt, morlet
 from tftb.processing import WignerVilleDistribution
 from scipy.signal import stft
+from scipy.signal import decimate
 
 # Loads iq file from a given filepath
 def load_iq_file(filepath):
@@ -14,19 +17,43 @@ def load_iq_file(filepath):
     iq_data = raw[::2] + 1j * raw[1::2]
     return iq_data
 
-def downsample(signal, factor):
-    return signal[::factor]
+def decimate_iq(iq_samples, D, num_taps=101):
+    return decimate(iq_samples, D, ftype='fir', zero_phase=False)
+
+### TIME SERIES ###
 
 # Mean of time series amplitude
 def feature_amplitude_mean(signal):
     magnitude = abs(signal)
-    return np.mean(signal)
+    return np.mean(magnitude)
 
 # Standard Deviation of time series amplitude
 def feature_amplitude_std(signal):
     magnitude = abs(signal)
-    return np.std(signal)
+    return np.std(magnitude)
 
+# Skew of signal
+def feature_skew(signal):
+    magnitude = abs(signal)
+    return skew(magnitude)
+
+###################################
+
+### Frequency Analysis ###
+def feature_spectral_entropy(signal, fs, nperseg=None):
+    # Estimate power spectral density (PSD) using Welch's method
+    freqs, psd = welch(signal, fs, nperseg=nperseg)
+    
+    # Normalize the PSD
+    psd_norm = psd / np.sum(psd)
+    
+    # Compute spectral entropy
+    entropy = -np.sum(psd_norm * np.log2(psd_norm + 1e-12))  # small epsilon to avoid log(0)
+    return entropy
+
+###################################
+
+### Time + Frequency Analysis ###
 # Wavelet Transform
 def feature_wavelet(signal):
     # Decompose real and imaginary parts separately
@@ -65,6 +92,7 @@ def feature_wigner_ville(signal):
 
     return np.array([total_energy, weighted_freq])
 
+# Short Time Fourier Transform
 def feature_stft(signal, fs=1.0, nperseg=256, noverlap=128):
     # Compute STFT
     f, t, Zxx = stft(signal, fs=fs, nperseg=nperseg, noverlap=noverlap)
@@ -81,6 +109,8 @@ def feature_stft(signal, fs=1.0, nperseg=256, noverlap=128):
     weighted_freq = np.sum(energy_per_freq * f) / np.sum(energy_per_freq)
 
     return np.array([total_energy, weighted_freq])
+
+###################################
 
 # Read iq files from input folder
 input_folder = "/home/jfeng/Desktop/Research/Debugging/tee_seer/stm_trust/j/fuzzing_paper/fuzzer/bash_script/snipuzz_teeseer"
@@ -99,7 +129,7 @@ for file in iq_files:
     iq_data = load_iq_file(file)
     
     # Downsample if desired
-    iq_data = downsample(iq_data, downsample_factor)
+    iq_data = decimate_iq(iq_data, downsample_factor)
 
     # Iterate over windows
     num_segments = len(iq_data) // fftsize
@@ -118,13 +148,16 @@ for file in iq_files:
         # Standard Deviation of Amplitude
         mean_std = feature_amplitude_std(seg)
         # TODO: Skew
+        skew_val = feature_skew(seg)
+
         # TODO: Autocorrelation. Returns the autocorrelation for a chosen lag
         # TODO: Kurtosis. Returns the kurtosis of this segment
 
         # Frequency Analysis
         # TODO: Num Peaks. Return the number of peaks seen in this segment (for FFT)
         # TODO: Spectral Centroid. Returns the frequency of the center of the energy in this segment (for FFT)
-        # TODO: Spectral Entropy
+        # Spectral Entropy
+        spectral_entropy = feature_spectral_entropy(seg, samp_rate, fftsize)
 
         # Time + Frequency Analysis
         # Wavelet Transform
@@ -133,12 +166,16 @@ for file in iq_files:
         #wvd_energy, wvd_weighted_freq = feature_wigner_ville(seg)
         # STFT
         stft_energy, stft_weighted_freq = feature_stft(seg, samp_rate)
-        # TODO: SCF or CAF
+        # TODO: SCF or CAF. Not sure what number(s) we should return yet
         
         # Store results
         results.append({
             "Filename": os.path.basename(file),
             "Segment": counter,
+            "Mean_Amplitude": mean_amplitude,
+            "Std_Amplitude": mean_std,
+            "Skew_Val": skew_val,
+            "Spectral_Entropy": spectral_entropy,
             "Wavelet_Total_Energy": wavelet_energy,
             "Wavelet_Weighted_Scale": wavelet_weighted_scale,
             "STFT_Total_Energy": stft_energy,
@@ -152,13 +189,25 @@ for file in iq_files:
     # Convert to DataFrame
     df = pd.DataFrame(results)
     
-    feature_cols = ["Wavelet_Total_Energy", "Wavelet_Weighted_Scale", "STFT_Total_Energy", "STFT_Weighted_Frequency"]
+    # Add all numeric features here
+    feature_cols = [
+        "Mean_Amplitude",
+        "Std_Amplitude",
+        "Skew_Val",
+        "Spectral_Entropy",
+        "Wavelet_Total_Energy",
+        "Wavelet_Weighted_Scale",
+        "STFT_Total_Energy",
+        "STFT_Weighted_Frequency"
+    ]
     
     # Optional: log-transform energy features to reduce dynamic range
     df["Wavelet_Total_Energy"] = np.log1p(df["Wavelet_Total_Energy"])
     df["STFT_Total_Energy"] = np.log1p(df["STFT_Total_Energy"])
 
-    df[feature_cols] = (df[feature_cols] - df[feature_cols].min()) / (df[feature_cols].max() - df[feature_cols].min())
+    # Standardize features: zero mean, unit variance
+    df[feature_cols] = (df[feature_cols] - df[feature_cols].mean()) / df[feature_cols].std()
+
 
 
     # Get base filename without extension
