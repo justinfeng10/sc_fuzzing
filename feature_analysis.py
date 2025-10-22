@@ -8,6 +8,9 @@ from scipy.signal import cwt, morlet
 from tftb.processing import WignerVilleDistribution
 from scipy.signal import stft
 from scipy.signal import decimate
+from scipy.stats import kurtosis
+from scipy.signal import find_peaks
+from numpy.fft import fft, fftshift, fftfreq
 
 # Loads iq file from a given filepath
 def load_iq_file(filepath):
@@ -24,18 +27,35 @@ def decimate_iq(iq_samples, D, num_taps=101):
 
 # Mean of time series amplitude
 def feature_amplitude_mean(signal):
-    magnitude = abs(signal)
+    magnitude = np.abs(signal)
     return np.mean(magnitude)
 
 # Standard Deviation of time series amplitude
 def feature_amplitude_std(signal):
-    magnitude = abs(signal)
+    magnitude = np.abs(signal)
     return np.std(magnitude)
 
 # Skew of signal
 def feature_skew(signal):
-    magnitude = abs(signal)
+    magnitude = np.abs(signal)
     return skew(magnitude)
+    
+# Kurtosis (tailedness of amplitude distribution)
+def feature_kurtosis(signal):
+    magnitude = np.abs(signal)
+    return kurtosis(magnitude, fisher=True)  # low kurtosis means noisy (flat)
+    
+# Correlation
+def feature_correlation(signal, lag=1):
+    magnitude = np.abs(signal)
+    if lag >= len(magnitude): # check valid lag
+        return np.nan
+
+    corr = np.correlate(magnitude - np.mean(magnitude),
+                        magnitude - np.mean(magnitude), mode='full') # cross-correlation of signal with itself
+    corr = corr[corr.size // 2:]  # only keep non-negative lags
+    corr /= corr[0]  # normalize s.t. corr[0] = 1
+    return corr[lag]
 
 ###################################
 
@@ -50,6 +70,24 @@ def feature_spectral_entropy(signal, fs, nperseg=None):
     # Compute spectral entropy
     entropy = -np.sum(psd_norm * np.log2(psd_norm + 1e-12))  # small epsilon to avoid log(0)
     return entropy
+    
+# Peak Detection
+def feature_peakdetection(signal, fs, threshold=0.1):
+    N = len(signal)
+    spectrum = np.abs(fft(signal)) # get fft of signal
+    spectrum = spectrum[:N // 2] # keep positive frequencies
+    spectrum /= np.max(spectrum)  # normalize
+
+    peaks, _ = find_peaks(spectrum, height=threshold)
+    return len(peaks)
+
+# Central Spectroid
+def feature_spectralcentroid(signal, fs):
+    N = len(signal)
+    magnitude = np.abs(fft(signal))[:N // 2] # take fft and only keep positive frequencies
+    freqs = np.linspace(0, fs / 2, N // 2) # keep nyquist num of samples
+    centroid = np.sum(freqs * magnitude) / np.sum(magnitude) # weighted mean frequency
+    return centroid
 
 ###################################
 
@@ -109,11 +147,32 @@ def feature_stft(signal, fs=1.0, nperseg=256, noverlap=128):
     weighted_freq = np.sum(energy_per_freq * f) / np.sum(energy_per_freq)
 
     return np.array([total_energy, weighted_freq])
+    
+# scf
+def feature_scf(signal, fs, alpha=1000):
+    N = len(signal)
+    fshift = int(alpha * N / fs) # shift index based on cyclic freq
+    spectrum = fftshift(fft(signal))
+    if abs(fshift) >= N: # skip invalid shift values
+        return np.nan
+    scf_val = np.mean(np.conjugate(spectrum[:N - fshift]) * spectrum[fshift:]) # cyclic cross correlation
+    return np.abs(scf_val)
+
+# caf
+def feature_caf(signal, fs, alpha=1000, lag=1):
+    N = len(signal)
+    if lag >= N: # check that lag is valid
+        return np.nan
+    t = np.arange(N - lag) / fs
+    term1 = signal[:N - lag]
+    term2 = np.conjugate(signal[lag:])
+    caf_val = np.mean(term1 * term2 * np.exp(-1j * 2 * np.pi * alpha * t)) # the equation 
+    return np.abs(caf_val)
 
 ###################################
 
 # Read iq files from input folder
-input_folder = "/home/jfeng/Desktop/Research/Debugging/tee_seer/stm_trust/j/fuzzing_paper/fuzzer/bash_script/snipuzz_teeseer"
+input_folder = "/home/jfeng/Desktop/Research/Debugging/tee_seer/stm_trust/j/fuzzing_paper/fuzzer/bash_script/snipuzz_teeseer/comparison"
 # Parameters
 samp_rate = 2e6
 fcent = 2.402e9
@@ -151,11 +210,15 @@ for file in iq_files:
         skew_val = feature_skew(seg)
 
         # TODO: Autocorrelation. Returns the autocorrelation for a chosen lag
+        autocorrelation_val = feature_correlation(seg)
         # TODO: Kurtosis. Returns the kurtosis of this segment
+        kurtosis_val = feature_kurtosis(seg)
 
         # Frequency Analysis
         # TODO: Num Peaks. Return the number of peaks seen in this segment (for FFT)
+        num_peaks = feature_peakdetection(seg, samp_rate)
         # TODO: Spectral Centroid. Returns the frequency of the center of the energy in this segment (for FFT)
+        spectral_centroid = feature_spectralcentroid(seg, samp_rate)
         # Spectral Entropy
         spectral_entropy = feature_spectral_entropy(seg, samp_rate, fftsize)
 
@@ -167,6 +230,8 @@ for file in iq_files:
         # STFT
         stft_energy, stft_weighted_freq = feature_stft(seg, samp_rate)
         # TODO: SCF or CAF. Not sure what number(s) we should return yet
+        scf_val = feature_scf(seg, samp_rate, alpha=1e5)
+        caf_val = feature_caf(seg, samp_rate, alpha=1e5, lag=10)
         
         # Store results
         results.append({
@@ -175,11 +240,17 @@ for file in iq_files:
             "Mean_Amplitude": mean_amplitude,
             "Std_Amplitude": mean_std,
             "Skew_Val": skew_val,
+            "Kurtosis": kurtosis_val,
+            "Autocorrelation": autocorrelation_val,
             "Spectral_Entropy": spectral_entropy,
+            "Num_Peaks": num_peaks,
+            "Spectral_Centroid": spectral_centroid,
             "Wavelet_Total_Energy": wavelet_energy,
             "Wavelet_Weighted_Scale": wavelet_weighted_scale,
             "STFT_Total_Energy": stft_energy,
             "STFT_Weighted_Frequency": stft_weighted_freq,
+            "SCF_Val": scf_val,
+            "CAF_Val": caf_val,
         })
         
            
@@ -194,11 +265,17 @@ for file in iq_files:
         "Mean_Amplitude",
         "Std_Amplitude",
         "Skew_Val",
+        "Kurtosis",
+        "Autocorrelation",
         "Spectral_Entropy",
+        "Num_Peaks",
+        "Spectral_Centroid",
         "Wavelet_Total_Energy",
         "Wavelet_Weighted_Scale",
         "STFT_Total_Energy",
-        "STFT_Weighted_Frequency"
+        "STFT_Weighted_Frequency",
+        "SCF_Val",
+        "CAF_Val"
     ]
     
     # Optional: log-transform energy features to reduce dynamic range
