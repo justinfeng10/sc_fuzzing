@@ -9,7 +9,7 @@ from scipy.spatial.distance import mahalanobis
 
 # === CONFIGURATION ===
 FEATURE_FIFO = "/home/jfeng/Desktop/Research/Debugging/tee_seer/stm_trust/j/fuzzing_paper/fuzzer/bash_script/feature_fifo"
-FFT_SIZE = 2048
+FFT_SIZE = 512
 SAMPLE_RATE = int(2e6 / 2)  # 400 kHz
 ANOMALY_WINDOW_THRESHOLD_IF = 5  # segment flagged if ≥4 anomalous windows (Isolation Forest)
 ANOMALY_WINDOW_THRESHOLD_MD = 2  # segment flagged if ≥1 anomalous windows (Mahalanobis)
